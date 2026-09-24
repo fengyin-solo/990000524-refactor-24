@@ -4,8 +4,8 @@
     title="Add New Card"
     width="480px"
     :close-on-click-modal="false"
-    @update:model-value="$emit('update:visible', $event)"
-    @open="resetForm"
+    @update:model-value="handleDialogToggle"
+    @open="resetForm()"
   >
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
       <el-form-item label="Title" prop="title">
@@ -39,16 +39,15 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="$emit('update:visible', false)">Cancel</el-button>
-      <el-button type="primary" :loading="adding" @click="handleAdd">Add Card</el-button>
+      <el-button :disabled="submitting" @click="handleCancel">Cancel</el-button>
+      <el-button type="primary" :loading="submitting" @click="handleAdd">Add Card</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import { useBoardStore } from '../stores/board.js'
+import { useCardForm } from '../composables/useCardForm.js'
 
 const props = defineProps({
   visible: Boolean,
@@ -58,49 +57,28 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'added'])
 
 const boardStore = useBoardStore()
-const formRef = ref(null)
-const adding = ref(false)
+const { formRef, form, rules, submitting, resetForm, submitForm } = useCardForm()
 
-const form = ref({
-  title: '',
-  description: '',
-  priority: 'medium',
-  due_date: ''
-})
-
-const rules = {
-  title: [{ required: true, message: 'Card title is required', trigger: 'blur' }]
+// Ignore close requests (Cancel/X/Esc) while a submission is in flight,
+// so cancelling can't leave a half-created card behind.
+function handleDialogToggle(value) {
+  if (submitting.value) return
+  emit('update:visible', value)
 }
 
-function resetForm() {
-  form.value = {
-    title: '',
-    description: '',
-    priority: 'medium',
-    due_date: ''
-  }
+function handleCancel() {
+  resetForm()
+  emit('update:visible', false)
 }
 
 async function handleAdd() {
-  if (!formRef.value) return
-  const valid = await formRef.value.validate().catch(() => false)
-  if (!valid) return
-
-  adding.value = true
-  try {
-    await boardStore.addCard(props.columnId, {
-      title: form.value.title,
-      description: form.value.description,
-      priority: form.value.priority,
-      due_date: form.value.due_date || null
-    })
-    ElMessage.success('Card added!')
+  const added = await submitForm(
+    payload => boardStore.addCard(props.columnId, payload),
+    { successMessage: 'Card added!', errorMessage: 'Failed to add card' }
+  )
+  if (added) {
     emit('update:visible', false)
     emit('added')
-  } catch (err) {
-    ElMessage.error(err.response?.data?.error || 'Failed to add card')
-  } finally {
-    adding.value = false
   }
 }
 </script>
