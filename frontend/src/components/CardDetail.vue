@@ -4,7 +4,7 @@
     title="Card Details"
     width="540px"
     :close-on-click-modal="false"
-    @update:model-value="$emit('update:visible', $event)"
+    @update:model-value="handleVisibleChange"
     @open="initForm"
   >
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
@@ -51,16 +51,17 @@
     </el-form>
 
     <template #footer>
-      <el-button @click="$emit('update:visible', false)">Cancel</el-button>
+      <el-button :disabled="submitting" @click="requestClose">Cancel</el-button>
       <el-button type="primary" :loading="saving" @click="handleSave">Save Changes</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useBoardStore } from '../stores/board.js'
+import { useCardForm } from '../composables/useCardForm.js'
 
 const props = defineProps({
   visible: Boolean,
@@ -72,59 +73,63 @@ const emit = defineEmits(['update:visible', 'updated', 'move'])
 
 const boardStore = useBoardStore()
 const formRef = ref(null)
-const saving = ref(false)
 const moveTarget = ref(null)
 
-const form = ref({
-  title: '',
-  description: '',
-  priority: 'medium',
-  due_date: ''
-})
-
-const rules = {
-  title: [{ required: true, message: 'Title is required', trigger: 'blur' }]
-}
+const {
+  form,
+  rules,
+  submitting: saving,
+  resetForm,
+  submitCardForm,
+  canRequestClose
+} = useCardForm(formRef)
 
 function initForm() {
-  if (props.card) {
-    form.value = {
-      title: props.card.title || '',
-      description: props.card.description || '',
-      priority: props.card.priority || 'medium',
-      due_date: props.card.due_date || ''
-    }
-    moveTarget.value = null
-  }
+  if (!props.card) return
+  resetForm({
+    title: props.card.title || '',
+    description: props.card.description || '',
+    priority: props.card.priority || 'medium',
+    due_date: props.card.due_date || ''
+  })
+  moveTarget.value = null
+}
+
+function requestClose() {
+  if (!saving.value) emit('update:visible', false)
+}
+
+function handleVisibleChange(value) {
+  if (canRequestClose(value)) emit('update:visible', value)
 }
 
 async function handleSave() {
-  if (!formRef.value) return
-  const valid = await formRef.value.validate().catch(() => false)
-  if (!valid) return
+  const cardId = props.card.id
+  const shouldMove = !!moveTarget.value && moveTarget.value !== props.card.column_id
 
-  saving.value = true
-  try {
-    const updated = await boardStore.updateCard(props.card.id, {
-      title: form.value.title,
-      description: form.value.description,
-      priority: form.value.priority,
-      due_date: form.value.due_date || null
-    })
-    emit('updated', updated)
-    ElMessage.success('Card updated')
+  const updated = await submitCardForm({
+    // Update and move run inside the same shared submit: either both are
+    // reported as success, or the whole save fails and the dialog stays
+    // open with the single shared error feedback.
+    submit: async (values) => {
+      const result = await boardStore.updateCard(cardId, {
+        title: values.title,
+        description: values.description,
+        priority: values.priority,
+        due_date: values.due_date || null
+      })
+      if (shouldMove) {
+        await boardStore.moveCard(cardId, moveTarget.value, 0)
+      }
+      return result
+    },
+    successMessage: 'Card updated',
+    errorMessage: 'Failed to update card'
+  })
+  if (!updated) return
 
-    // Handle move if target column selected
-    if (moveTarget.value && moveTarget.value !== props.card.column_id) {
-      await boardStore.moveCard(props.card.id, moveTarget.value, 0)
-      ElMessage.success('Card moved')
-    }
-
-    emit('update:visible', false)
-  } catch (err) {
-    ElMessage.error('Failed to update card')
-  } finally {
-    saving.value = false
-  }
+  emit('updated', updated)
+  if (shouldMove) ElMessage.success('Card moved')
+  emit('update:visible', false)
 }
 </script>
